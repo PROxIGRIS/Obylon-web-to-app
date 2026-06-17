@@ -1,0 +1,833 @@
+/**
+ * SuminagashiOrb — Cyberpunk fluid-ink orb for the Obylon welcome flow.
+ *
+ * Technique: velocity-advected ink particles on a double-buffered Float32 field,
+ * rendered via layered canvas compositing. NOT a generic gradient — each frame
+ * the ink diffuses, advects with the velocity field, and bleeds into neighbours
+ * producing authentic Suminagashi ring patterns in blood-red / void-black.
+ *
+ * Performance tiers:
+ *  HIGH  (8+ cores, 4GB+)  — full 128×128 fluid grid, 80 ink particles, DPR≤2
+ *  MED   (4-7 cores)       — 96×96 grid, 48 particles, DPR=1
+ *  LOW   (≤3 cores / pref-reduced) — CSS-only pulsing sphere, zero canvas cost
+ *
+ * Props:
+ *   mouseX / mouseY    — window coords (throttled by parent, 30 fps max)
+ *   strengthScore      — 0-100 password strength
+ *   step               — 0=welcome 1=name 2=password 3=extras
+ *   isComplete         — triggers assimilation burst
+ *   holdProgress       — 0-1 easter-egg hold ring
+ *   typingVelocity     — strokes/sec (raises turbulence)
+ */
+
+import {
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+  memo,
+  useState,
+} from "react";
+import { motion, AnimatePresence } from "framer-motion";
+
+/* ─────────────────────────────────────────────
+   Types
+   ───────────────────────────────────────────── */
+export interface SuminagashiOrbProps {
+  mouseX: number;
+  mouseY: number;
+  strengthScore?: number;
+  step?: number;
+  isComplete?: boolean;
+  holdProgress?: number;
+  typingVelocity?: number;
+  size?: number; // logical px, default 200
+}
+
+/* ─────────────────────────────────────────────
+   Device tier detection (memoised at module level)
+   ───────────────────────────────────────────── */
+type Tier = "high" | "med" | "low";
+
+function detectTier(): Tier {
+  if (typeof window === "undefined") return "low";
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return "low";
+  const cores = navigator.hardwareConcurrency ?? 2;
+  const mem   = (navigator as any).deviceMemory ?? 1;
+  if (cores >= 8 && mem >= 4) return "high";
+  if (cores >= 4 || mem >= 2) return "med";
+  return "low";
+}
+
+const TIER: Tier = detectTier();
+
+/* ─────────────────────────────────────────────
+   Fluid grid constants per tier
+   ───────────────────────────────────────────── */
+const GRID = {
+  high: { N: 128, particles: 80, dpr: Math.min(window?.devicePixelRatio ?? 1, 2) },
+  med:  { N: 96,  particles: 48, dpr: 1 },
+  low:  { N: 0,   particles: 0,  dpr: 1 },
+}[TIER];
+
+/* ─────────────────────────────────────────────
+   Fluid solver — Stable Fluids (Jos Stam 1999)
+   Reduced to 2D, 2-iter Gauss-Seidel, no pressure
+   (we fake incompressibility with vorticity only —
+   cheaper and looks better for ink marbling)
+   ───────────────────────────────────────────── */
+class FluidGrid {
+  N: number;
+  size: number;
+  // velocity
+  vx: Float32Array; vy: Float32Array;
+  vx0: Float32Array; vy0: Float32Array;
+  // ink channels: R (crimson), B (void/dark), W (highlight)
+  inkR: Float32Array; inkR0: Float32Array;
+  inkB: Float32Array; inkB0: Float32Array;
+
+  constructor(N: number) {
+    this.N = N;
+    this.size = (N + 2) * (N + 2);
+    const s = this.size;
+    this.vx  = new Float32Array(s); this.vx0 = new Float32Array(s);
+    this.vy  = new Float32Array(s); this.vy0 = new Float32Array(s);
+    this.inkR = new Float32Array(s); this.inkR0 = new Float32Array(s);
+    this.inkB = new Float32Array(s); this.inkB0 = new Float32Array(s);
+  }
+
+  idx(i: number, j: number) { return i + (this.N + 2) * j; }
+
+  addSource(x: Float32Array, s: Float32Array, dt: number) {
+    for (let i = 0; i < this.size; i++) x[i] += dt * s[i];
+  }
+
+  diffuse(b: number, x: Float32Array, x0: Float32Array, diff: number, dt: number) {
+    const N = this.N;
+    const a = dt * diff * N * N;
+    for (let k = 0; k < 2; k++) {         // 2 GS iters (fast)
+      for (let j = 1; j <= N; j++) {
+        for (let i = 1; i <= N; i++) {
+          x[this.idx(i,j)] = (
+            x0[this.idx(i,j)] +
+            a * (x[this.idx(i-1,j)] + x[this.idx(i+1,j)] +
+                 x[this.idx(i,j-1)] + x[this.idx(i,j+1)])
+          ) / (1 + 4 * a);
+        }
+      }
+      this.setBnd(b, x);
+    }
+  }
+
+  advect(b: number, d: Float32Array, d0: Float32Array,
+         vx: Float32Array, vy: Float32Array, dt: number) {
+    const N = this.N;
+    const dt0 = dt * N;
+    for (let j = 1; j <= N; j++) {
+      for (let i = 1; i <= N; i++) {
+        let x = i - dt0 * vx[this.idx(i,j)];
+        let y = j - dt0 * vy[this.idx(i,j)];
+        x = Math.max(0.5, Math.min(N + 0.5, x));
+        y = Math.max(0.5, Math.min(N + 0.5, y));
+        const i0 = Math.floor(x), i1 = i0 + 1;
+        const j0 = Math.floor(y), j1 = j0 + 1;
+        const s1 = x - i0, s0 = 1 - s1;
+        const t1 = y - j0, t0 = 1 - t1;
+        d[this.idx(i,j)] =
+          s0*(t0*d0[this.idx(i0,j0)] + t1*d0[this.idx(i0,j1)]) +
+          s1*(t0*d0[this.idx(i1,j0)] + t1*d0[this.idx(i1,j1)]);
+      }
+    }
+    this.setBnd(b, d);
+  }
+
+  setBnd(b: number, x: Float32Array) {
+    const N = this.N;
+    for (let i = 1; i <= N; i++) {
+      x[this.idx(0,   i)] = b===1 ? -x[this.idx(1,i)] : x[this.idx(1,i)];
+      x[this.idx(N+1, i)] = b===1 ? -x[this.idx(N,i)] : x[this.idx(N,i)];
+      x[this.idx(i,   0)] = b===2 ? -x[this.idx(i,1)] : x[this.idx(i,1)];
+      x[this.idx(i, N+1)] = b===2 ? -x[this.idx(i,N)] : x[this.idx(i,N)];
+    }
+    x[this.idx(0,0)]     = 0.5*(x[this.idx(1,0)]     + x[this.idx(0,1)]);
+    x[this.idx(0,N+1)]   = 0.5*(x[this.idx(1,N+1)]   + x[this.idx(0,N)]);
+    x[this.idx(N+1,0)]   = 0.5*(x[this.idx(N,0)]     + x[this.idx(N+1,1)]);
+    x[this.idx(N+1,N+1)] = 0.5*(x[this.idx(N,N+1)]   + x[this.idx(N+1,N)]);
+  }
+
+  // Vorticity confinement — keeps ink swirling
+  addVorticity(strength: number) {
+    const N = this.N;
+    const curl = new Float32Array(this.size);
+    for (let j = 1; j <= N; j++) {
+      for (let i = 1; i <= N; i++) {
+        curl[this.idx(i,j)] =
+          (this.vy[this.idx(i+1,j)] - this.vy[this.idx(i-1,j)]) * 0.5 -
+          (this.vx[this.idx(i,j+1)] - this.vx[this.idx(i,j-1)]) * 0.5;
+      }
+    }
+    for (let j = 2; j < N; j++) {
+      for (let i = 2; i < N; i++) {
+        const gx = Math.abs(curl[this.idx(i+1,j)]) - Math.abs(curl[this.idx(i-1,j)]);
+        const gy = Math.abs(curl[this.idx(i,j+1)]) - Math.abs(curl[this.idx(i,j-1)]);
+        const len = Math.sqrt(gx*gx + gy*gy) + 1e-5;
+        this.vx[this.idx(i,j)] += strength * ( gy/len) * curl[this.idx(i,j)];
+        this.vy[this.idx(i,j)] += strength * (-gx/len) * curl[this.idx(i,j)];
+      }
+    }
+  }
+
+  step(dt: number, viscosity: number, diffusion: number, vorticity: number) {
+    // Velocity step
+    this.addSource(this.vx, this.vx0, dt);
+    this.addSource(this.vy, this.vy0, dt);
+    [this.vx, this.vx0] = [this.vx0, this.vx];
+    [this.vy, this.vy0] = [this.vy0, this.vy];
+    this.diffuse(1, this.vx, this.vx0, viscosity, dt);
+    this.diffuse(2, this.vy, this.vy0, viscosity, dt);
+    this.addVorticity(vorticity);
+    [this.vx, this.vx0] = [this.vx0, this.vx];
+    [this.vy, this.vy0] = [this.vy0, this.vy];
+    this.advect(1, this.vx, this.vx0, this.vx0, this.vy0, dt);
+    this.advect(2, this.vy, this.vy0, this.vx0, this.vy0, dt);
+    // Clear sources
+    this.vx0.fill(0); this.vy0.fill(0);
+
+    // Ink step (R channel)
+    this.addSource(this.inkR, this.inkR0, dt);
+    [this.inkR, this.inkR0] = [this.inkR0, this.inkR];
+    this.diffuse(0, this.inkR, this.inkR0, diffusion, dt);
+    [this.inkR, this.inkR0] = [this.inkR0, this.inkR];
+    this.advect(0, this.inkR, this.inkR0, this.vx, this.vy, dt);
+    this.inkR0.fill(0);
+
+    // Ink step (B channel)
+    this.addSource(this.inkB, this.inkB0, dt);
+    [this.inkB, this.inkB0] = [this.inkB0, this.inkB];
+    this.diffuse(0, this.inkB, this.inkB0, diffusion * 0.7, dt);
+    [this.inkB, this.inkB0] = [this.inkB0, this.inkB];
+    this.advect(0, this.inkB, this.inkB0, this.vx, this.vy, dt);
+    this.inkB0.fill(0);
+
+    // Gentle global decay so old ink fades (Suminagashi persistence)
+    for (let i = 0; i < this.size; i++) {
+      this.inkR[i] *= 0.9985;
+      this.inkB[i] *= 0.9985;
+    }
+  }
+
+  addInk(fx: number, fy: number, amtR: number, amtB: number, radius: number) {
+    const N = this.N;
+    const ci = Math.round(fx * N) + 1;
+    const cj = Math.round(fy * N) + 1;
+    const r = Math.max(1, Math.round(radius * N));
+    for (let dj = -r; dj <= r; dj++) {
+      for (let di = -r; di <= r; di++) {
+        if (di*di + dj*dj > r*r) continue;
+        const ii = ci + di, jj = cj + dj;
+        if (ii < 1 || ii > N || jj < 1 || jj > N) continue;
+        const falloff = 1 - Math.sqrt(di*di + dj*dj) / (r + 1);
+        this.inkR0[this.idx(ii,jj)] += amtR * falloff;
+        this.inkB0[this.idx(ii,jj)] += amtB * falloff;
+      }
+    }
+  }
+
+  addVelocity(fx: number, fy: number, ax: number, ay: number, radius: number) {
+    const N = this.N;
+    const ci = Math.round(fx * N) + 1;
+    const cj = Math.round(fy * N) + 1;
+    const r  = Math.max(1, Math.round(radius * N));
+    for (let dj = -r; dj <= r; dj++) {
+      for (let di = -r; di <= r; di++) {
+        if (di*di + dj*dj > r*r) continue;
+        const ii = ci + di, jj = cj + dj;
+        if (ii < 1 || ii > N || jj < 1 || jj > N) continue;
+        const falloff = 1 - Math.sqrt(di*di + dj*dj) / (r + 1);
+        this.vx0[this.idx(ii,jj)] += ax * falloff;
+        this.vy0[this.idx(ii,jj)] += ay * falloff;
+      }
+    }
+  }
+}
+
+/* ─────────────────────────────────────────────
+   Ink particle type (seeding positions)
+   ───────────────────────────────────────────── */
+interface InkParticle {
+  x: number; y: number;       // 0-1 normalised
+  vx: number; vy: number;
+  life: number; maxLife: number;
+  r: number; g: number; b: number;
+  size: number;
+  ring: boolean;              // Suminagashi ring seed vs blob
+}
+
+/* ─────────────────────────────────────────────
+   Render: map fluid grid to ImageData
+   ───────────────────────────────────────────── */
+function renderFluidToImageData(
+  fluid: FluidGrid,
+  imgData: ImageData,
+  N: number,
+  strengthScore: number,
+  holdProgress: number
+) {
+  const { data } = imgData;
+  const W = imgData.width;
+  const H = imgData.height;
+
+  // Colour palette: background void, crimson ink, dark ink
+  // Base: near-black void  #090608
+  const BG_R = 9, BG_G = 6, BG_B = 8;
+
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      // Grid coords
+      const fi = Math.floor((px / W) * N) + 1;
+      const fj = Math.floor((py / H) * N) + 1;
+      const idx = fi + (N + 2) * fj;
+
+      // Raw fluid values (clamped)
+      let r = Math.min(1, Math.max(0, fluid.inkR[idx]));
+      let bk = Math.min(1, Math.max(0, fluid.inkB[idx]));
+
+      // Strength modulates crimson saturation vs chaos bleeding
+      // high strength → more stable deep crimson
+      // low strength  → more chaotic blue-black
+      const sn = strengthScore / 100;
+      const crimsonAmt = r * (0.4 + sn * 0.6);
+      const voidAmt    = bk * (0.3 + (1 - sn) * 0.7);
+
+      // Suminagashi ring edge detection — boost contrast at gradient boundary
+      const fi2 = Math.min(fi + 1, N); const fi0 = Math.max(fi - 1, 1);
+      const fj2 = Math.min(fj + 1, N); const fj0 = Math.max(fj - 1, 1);
+      const edgeR = Math.abs(fluid.inkR[fi2 + (N+2)*fj] - fluid.inkR[fi0 + (N+2)*fj]) +
+                    Math.abs(fluid.inkR[fi + (N+2)*fj2] - fluid.inkR[fi + (N+2)*fj0]);
+      const ringBoost = Math.min(edgeR * 4, 1) * 0.6;
+
+      // Compose final colour on void background
+      let pr = BG_R + Math.round(crimsonAmt * (180 - BG_R) + ringBoost * 80);
+      let pg = BG_G + Math.round(crimsonAmt * (20  - BG_G) + ringBoost * 8  - voidAmt * 3);
+      let pb = BG_B + Math.round(crimsonAmt * (25  - BG_B) + ringBoost * 10 - voidAmt * 4);
+
+      // Void ink darkens
+      pr = Math.max(0, Math.round(pr - voidAmt * 40));
+      pg = Math.max(0, Math.round(pg - voidAmt * 30));
+      pb = Math.max(0, Math.round(pb - voidAmt * 35));
+
+      // Easter egg hold glow — green-tinged glitch
+      if (holdProgress > 0.05) {
+        pr = Math.round(pr * (1 - holdProgress * 0.3) + holdProgress * 20);
+        pg = Math.round(pg + holdProgress * 15);
+        pb = Math.round(pb + holdProgress * 8);
+      }
+
+      const off = (py * W + px) * 4;
+      data[off]   = Math.min(255, pr);
+      data[off+1] = Math.min(255, pg);
+      data[off+2] = Math.min(255, pb);
+      data[off+3] = 255;
+    }
+  }
+}
+
+/* ─────────────────────────────────────────────
+   Low-end CSS fallback
+   ───────────────────────────────────────────── */
+const LowEndOrb = memo(({ size }: { size: number }) => (
+  <div
+    style={{ width: size, height: size }}
+    className="relative flex items-center justify-center"
+    aria-hidden="true"
+  >
+    <motion.div
+      className="absolute rounded-full"
+      style={{
+        width: size * 0.55,
+        height: size * 0.55,
+        background: "radial-gradient(ellipse at 35% 35%, #3d0808, #1a0303, #090608)",
+        boxShadow: "0 0 40px rgba(140,20,20,0.4), inset 0 0 20px rgba(0,0,0,0.8)",
+      }}
+      animate={{ scale: [1, 1.04, 1], boxShadow: [
+        "0 0 30px rgba(140,20,20,0.3)",
+        "0 0 50px rgba(140,20,20,0.5)",
+        "0 0 30px rgba(140,20,20,0.3)",
+      ]}}
+      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+    />
+    {[0.75, 0.9, 1.05].map((scale, i) => (
+      <motion.div
+        key={i}
+        className="absolute rounded-full border"
+        style={{
+          width: size * 0.55 * scale,
+          height: size * 0.55 * scale,
+          borderColor: `rgba(140,20,20,${0.15 - i * 0.04})`,
+        }}
+        animate={{ rotate: i % 2 === 0 ? 360 : -360 }}
+        transition={{ duration: 14 + i * 5, repeat: Infinity, ease: "linear" }}
+      />
+    ))}
+  </div>
+));
+
+/* ─────────────────────────────────────────────
+   Main orb component
+   ───────────────────────────────────────────── */
+export const SuminagashiOrb = memo(function SuminagashiOrb({
+  mouseX,
+  mouseY,
+  strengthScore = 0,
+  step = 0,
+  isComplete = false,
+  holdProgress = 0,
+  typingVelocity = 0,
+  size = 200,
+}: SuminagashiOrbProps) {
+
+  // ── canvas refs ──
+  const fluidCanvasRef  = useRef<HTMLCanvasElement>(null); // fluid field (low-res)
+  const glowCanvasRef   = useRef<HTMLCanvasElement>(null); // glow / scan overlay
+  const containerRef    = useRef<HTMLDivElement>(null);
+
+  // ── fluid sim ──
+  const fluidRef   = useRef<FluidGrid | null>(null);
+  const rafRef     = useRef<number>(0);
+  const timeRef    = useRef<number>(0);
+  const prevMouseRef = useRef({ x: -1, y: -1 });
+  const imgDataRef = useRef<ImageData | null>(null);
+
+  // ── ink particles (seeder) ──
+  const particlesRef = useRef<InkParticle[]>([]);
+  const burstFiredRef = useRef(false);
+
+  // ── live refs for props (avoid stale closures in RAF) ──
+  const strengthRef  = useRef(strengthScore);
+  const holdRef      = useRef(holdProgress);
+  const stepRef      = useRef(step);
+  const typingRef    = useRef(typingVelocity);
+  const completeRef  = useRef(isComplete);
+  const mouseRef     = useRef({ x: mouseX, y: mouseY });
+
+  useEffect(() => { strengthRef.current  = strengthScore; }, [strengthScore]);
+  useEffect(() => { holdRef.current      = holdProgress;  }, [holdProgress]);
+  useEffect(() => { stepRef.current      = step;          }, [step]);
+  useEffect(() => { typingRef.current    = typingVelocity;}, [typingVelocity]);
+  useEffect(() => { completeRef.current  = isComplete;    }, [isComplete]);
+  useEffect(() => { mouseRef.current     = { x: mouseX, y: mouseY }; }, [mouseX, mouseY]);
+
+  // ── pixel size for fluid canvas (smaller = cheaper) ──
+  const N = GRID.N;
+  const fluidPx = N; // render fluid at NxN, upscale via CSS
+
+  const spawnInkParticle = useCallback((
+    fx: number, fy: number,
+    isRing: boolean,
+    crimson: number,
+    dark: number,
+  ) => {
+    const maxP = GRID.particles;
+    if (particlesRef.current.length >= maxP) {
+      particlesRef.current.shift(); // drop oldest
+    }
+    const angle = Math.random() * Math.PI * 2;
+    const speed = isRing ? 0.0008 + Math.random() * 0.001 : 0.0005 + Math.random() * 0.002;
+    particlesRef.current.push({
+      x: fx, y: fy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1,
+      maxLife: isRing ? 4 + Math.random() * 6 : 2 + Math.random() * 3,
+      r: 140 + Math.random() * 60,
+      g: 15 + Math.random() * 20,
+      b: 15 + Math.random() * 20,
+      size: isRing ? 0.025 + Math.random() * 0.02 : 0.015 + Math.random() * 0.03,
+      ring: isRing,
+    });
+  }, []);
+
+  // ── initialise fluid + seed opening ink rings ──
+  useEffect(() => {
+    if (TIER === "low") return;
+
+    const fluid = new FluidGrid(N);
+    fluidRef.current = fluid;
+
+    // Seed initial Suminagashi rings (concentric, slightly off-centre like real sumi)
+    const CX = 0.5, CY = 0.5;
+    const ringRadii = [0.06, 0.13, 0.21, 0.30, 0.38];
+    ringRadii.forEach((rad, ri) => {
+      const segs = 32 + ri * 8;
+      for (let s = 0; s < segs; s++) {
+        const angle = (s / segs) * Math.PI * 2;
+        // Slight jitter per ring for organic look
+        const jitter = (Math.random() - 0.5) * 0.01;
+        const fx = CX + (rad + jitter) * Math.cos(angle) * (1 + jitter);
+        const fy = CY + (rad + jitter) * Math.sin(angle) * (1 + jitter);
+        const inkAmt = 0.8 - ri * 0.12;
+        const isRing = ri % 2 === 0;
+        fluid.addInk(fx, fy, isRing ? inkAmt : inkAmt * 0.3, isRing ? 0.1 : inkAmt * 0.7, 0.018);
+        // Tiny tangential velocity to give the rings a spin bias
+        const tx = -Math.sin(angle) * 0.8 * (ri % 2 === 0 ? 1 : -1);
+        const ty =  Math.cos(angle) * 0.8 * (ri % 2 === 0 ? 1 : -1);
+        fluid.addVelocity(fx, fy, tx, ty, 0.02);
+        spawnInkParticle(fx, fy, true, isRing ? inkAmt : 0, isRing ? 0 : inkAmt);
+      }
+    });
+
+    // Prep ImageData
+    const fc = fluidCanvasRef.current;
+    if (fc) {
+      fc.width  = fluidPx;
+      fc.height = fluidPx;
+      const ctx2d = fc.getContext("2d", { willReadFrequently: true });
+      if (ctx2d) imgDataRef.current = ctx2d.createImageData(fluidPx, fluidPx);
+    }
+
+    return () => { fluidRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── main RAF loop ──
+  useEffect(() => {
+    if (TIER === "low") return;
+
+    const fc  = fluidCanvasRef.current;
+    const gc  = glowCanvasRef.current;
+    if (!fc || !gc) return;
+
+    const fluidCtx = fc.getContext("2d", { willReadFrequently: true });
+    const glowCtx  = gc.getContext("2d");
+    if (!fluidCtx || !glowCtx) return;
+
+    gc.width  = size;
+    gc.height = size;
+
+    let lastSeed = 0;      // timestamp of last organic seeding
+    let lastMouse = { x: -1, y: -1 };
+    let lastTypingT = 0;
+
+    const loop = (ts: number) => {
+      rafRef.current = requestAnimationFrame(loop);
+      const dt = Math.min((ts - timeRef.current) / 1000, 0.033); // cap at 30fps worth
+      timeRef.current = ts;
+      const t = ts / 1000;
+
+      const fluid = fluidRef.current;
+      if (!fluid || !imgDataRef.current) return;
+
+      const sn = strengthRef.current / 100;
+      const hold = holdRef.current;
+      const stp  = stepRef.current;
+      const tv   = typingRef.current;
+      const done = completeRef.current;
+      const mx   = mouseRef.current.x;
+      const my   = mouseRef.current.y;
+
+      // ── Mouse interaction → velocity + ink injection ──
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const fx = (mx - rect.left) / rect.width;
+        const fy = (my - rect.top)  / rect.height;
+
+        if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) {
+          const dvx = (fx - (lastMouse.x < 0 ? fx : lastMouse.x)) * N * 4;
+          const dvy = (fy - (lastMouse.y < 0 ? fy : lastMouse.y)) * N * 4;
+          const speed = Math.sqrt(dvx*dvx + dvy*dvy);
+          if (speed > 0.3) {
+            fluid.addVelocity(fx, fy, dvx * 0.7, dvy * 0.7, 0.04);
+            // Drag spreads ink: crimson when strong, dark when weak
+            fluid.addInk(fx, fy,
+              0.25 * sn,
+              0.15 * (1 - sn),
+              0.025
+            );
+            if (speed > 2 && ts - lastSeed > 80) {
+              spawnInkParticle(fx, fy, false, sn * 0.8, (1-sn) * 0.5);
+              lastSeed = ts;
+            }
+          }
+          lastMouse = { x: fx, y: fy };
+        }
+      }
+
+      // ── Typing turbulence ──
+      if (tv > 0 && ts - lastTypingT > 150) {
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 0.08 + Math.random() * 0.15;
+        const fx2 = 0.5 + Math.cos(ang) * dist;
+        const fy2 = 0.5 + Math.sin(ang) * dist;
+        const turbStrength = Math.min(tv / 10, 1);
+        fluid.addVelocity(fx2, fy2,
+          (Math.random()-0.5) * turbStrength * 6,
+          (Math.random()-0.5) * turbStrength * 6,
+          0.035
+        );
+        fluid.addInk(fx2, fy2, turbStrength * 0.35 * sn, turbStrength * 0.2 * (1-sn), 0.022);
+        lastTypingT = ts;
+      }
+
+      // ── Organic periodic seeding — keeps orb alive when idle ──
+      if (ts - lastSeed > 800) {
+        const ang = t * 0.4 + Math.sin(t * 0.13) * Math.PI;
+        const rad = 0.2 + Math.sin(t * 0.22) * 0.12;
+        const fx3 = 0.5 + Math.cos(ang) * rad;
+        const fy3 = 0.5 + Math.sin(ang) * rad;
+        fluid.addInk(fx3, fy3, 0.4 * sn + 0.05, 0.15 * (1 - sn) + 0.05, 0.02);
+        fluid.addVelocity(fx3, fy3,
+          Math.cos(ang + Math.PI/2) * 0.6,
+          Math.sin(ang + Math.PI/2) * 0.6,
+          0.035
+        );
+        if (Math.random() > 0.6) spawnInkParticle(fx3, fy3, true, sn * 0.5, (1-sn)*0.3);
+        lastSeed = ts;
+      }
+
+      // ── Completion burst ──
+      if (done && !burstFiredRef.current) {
+        burstFiredRef.current = true;
+        for (let b = 0; b < 20; b++) {
+          const ang = Math.random() * Math.PI * 2;
+          const rad = Math.random() * 0.45;
+          fluid.addInk(0.5 + Math.cos(ang)*rad, 0.5 + Math.sin(ang)*rad, 1.5, 0.2, 0.04);
+          fluid.addVelocity(0.5 + Math.cos(ang)*rad*0.5, 0.5 + Math.sin(ang)*rad*0.5,
+            Math.cos(ang)*3, Math.sin(ang)*3, 0.06);
+        }
+      }
+
+      // ── Easter egg hold — chaotic vortex ──
+      if (hold > 0.1) {
+        const glitchT = t * (1 + hold * 8);
+        fluid.addVelocity(
+          0.5 + Math.cos(glitchT) * 0.2,
+          0.5 + Math.sin(glitchT * 1.3) * 0.2,
+          Math.cos(glitchT * 2.1) * hold * 5,
+          Math.sin(glitchT * 1.7) * hold * 5,
+          0.06
+        );
+        fluid.addInk(0.5, 0.5, 0.2 * hold, 0.4 * hold, 0.06);
+      }
+
+      // ── Sim step ──
+      // viscosity: low when strong (fluid stays crisp), high when weak (chaotic bleed)
+      const viscosity  = 0.00002 + (1-sn) * 0.0001;
+      const diffusion  = 0.00008 + (1-sn) * 0.0002;
+      const vorticity  = 0.12 + sn * 0.18; // strong = more ordered vortices
+      fluid.step(dt, viscosity, diffusion, vorticity);
+
+      // ── Render fluid to ImageData ──
+      renderFluidToImageData(fluid, imgDataRef.current, N, strengthRef.current, hold);
+      fluidCtx.putImageData(imgDataRef.current, 0, 0);
+
+      // ── Render glow / overlay canvas ──
+      glowCtx.clearRect(0, 0, size, size);
+
+      // Circular clip so fluid looks like an orb
+      const cx = size / 2, cy = size / 2;
+      const orbR = size * 0.44;
+
+      // Draw fluid upscaled inside circle
+      glowCtx.save();
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR, 0, Math.PI * 2);
+      glowCtx.clip();
+      glowCtx.imageSmoothingEnabled = true;
+      glowCtx.imageSmoothingQuality = "high";
+      glowCtx.drawImage(fc, cx - orbR, cy - orbR, orbR*2, orbR*2);
+
+      // Scan lines over fluid (CSS repeating-linear-gradient in canvas)
+      glowCtx.globalCompositeOperation = "overlay";
+      for (let sl = 0; sl < orbR*2; sl += 3) {
+        glowCtx.fillStyle = `rgba(0,0,0,${0.06 + Math.sin(sl * 0.8 + t*12) * 0.02})`;
+        glowCtx.fillRect(cx - orbR, cy - orbR + sl, orbR*2, 1.2);
+      }
+      glowCtx.globalCompositeOperation = "source-over";
+      glowCtx.restore();
+
+      // ── Orb glass sphere shading — NOT a generic gradient ──
+      // Deep shadow underlay
+      const shadowGrad = glowCtx.createRadialGradient(
+        cx + 8, cy + 10, 0, cx, cy, orbR
+      );
+      shadowGrad.addColorStop(0, "rgba(0,0,0,0)");
+      shadowGrad.addColorStop(0.7, "rgba(0,0,0,0.15)");
+      shadowGrad.addColorStop(1, "rgba(0,0,0,0.55)");
+      glowCtx.save();
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR, 0, Math.PI*2);
+      glowCtx.fillStyle = shadowGrad;
+      glowCtx.fill();
+      glowCtx.restore();
+
+      // Inner glow rim — blood-red edge light
+      const rimGrad = glowCtx.createRadialGradient(cx, cy, orbR*0.6, cx, cy, orbR);
+      const rimAlpha = 0.25 + sn * 0.25;
+      rimGrad.addColorStop(0, "rgba(140,20,20,0)");
+      rimGrad.addColorStop(0.8, `rgba(160,25,25,${rimAlpha * 0.4})`);
+      rimGrad.addColorStop(1, `rgba(180,30,30,${rimAlpha})`);
+      glowCtx.save();
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR, 0, Math.PI*2);
+      glowCtx.fillStyle = rimGrad;
+      glowCtx.globalCompositeOperation = "screen";
+      glowCtx.fill();
+      glowCtx.globalCompositeOperation = "source-over";
+      glowCtx.restore();
+
+      // Specular cap highlight (top-left, physics: light from upper-left)
+      const specR = orbR * 0.38;
+      const specGrad = glowCtx.createRadialGradient(
+        cx - orbR*0.28, cy - orbR*0.32, 0,
+        cx - orbR*0.18, cy - orbR*0.22, specR
+      );
+      specGrad.addColorStop(0, "rgba(255,220,220,0.22)");
+      specGrad.addColorStop(0.4, "rgba(255,200,200,0.07)");
+      specGrad.addColorStop(1, "rgba(255,200,200,0)");
+      glowCtx.save();
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR, 0, Math.PI*2);
+      glowCtx.clip();
+      glowCtx.fillStyle = specGrad;
+      glowCtx.fill();
+      glowCtx.restore();
+
+      // ── Orbiting data-point particles ──
+      const dpCount = 6 + stp * 3 + Math.round(sn * 6);
+      for (let d = 0; d < dpCount; d++) {
+        const ang2 = (d / dpCount) * Math.PI * 2 + t * 0.28;
+        const dpR  = orbR + 8 + Math.sin(t * 1.2 + d) * 4;
+        const dpX  = cx + Math.cos(ang2) * dpR;
+        const dpY  = cy + Math.sin(ang2) * dpR;
+        const dpA  = (0.2 + sn * 0.5) * (0.5 + 0.5 * Math.sin(t * 1.8 + d));
+
+        glowCtx.beginPath();
+        glowCtx.arc(dpX, dpY, 1.5 + sn * 1.2, 0, Math.PI*2);
+        glowCtx.fillStyle = `rgba(180,35,35,${dpA})`;
+        glowCtx.fill();
+
+        // Connecting arcs between adjacent particles (strength > 0.4)
+        if (sn > 0.4) {
+          const nextAng = ((d+1)/dpCount)*Math.PI*2 + t*0.28;
+          const nx = cx + Math.cos(nextAng) * dpR;
+          const ny = cy + Math.sin(nextAng) * dpR;
+          glowCtx.beginPath();
+          glowCtx.moveTo(dpX, dpY);
+          glowCtx.lineTo(nx, ny);
+          glowCtx.strokeStyle = `rgba(140,20,20,${dpA * 0.35})`;
+          glowCtx.lineWidth = 0.5;
+          glowCtx.stroke();
+        }
+      }
+
+      // ── Dashed scanning ring (sweeps clockwise) ──
+      const scanAngle = t * 0.9;
+      glowCtx.save();
+      glowCtx.strokeStyle = `rgba(180,35,35,${0.18 + sn * 0.2})`;
+      glowCtx.lineWidth = 0.8;
+      glowCtx.setLineDash([5, 12]);
+      glowCtx.lineDashOffset = -t * 40;
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR + 16, 0, Math.PI*2);
+      glowCtx.stroke();
+      glowCtx.setLineDash([]);
+      // Scan line inside orb — sweeping arc
+      glowCtx.beginPath();
+      glowCtx.arc(cx, cy, orbR, scanAngle, scanAngle + 0.6);
+      glowCtx.strokeStyle = `rgba(220,60,60,${0.12 + sn * 0.12})`;
+      glowCtx.lineWidth = 1.5;
+      glowCtx.stroke();
+      glowCtx.restore();
+
+      // ── Outer ambient glow ──
+      const ambGrad = glowCtx.createRadialGradient(cx, cy, orbR * 0.8, cx, cy, orbR * 1.8);
+      ambGrad.addColorStop(0, `rgba(140,20,20,${0.08 + sn * 0.12})`);
+      ambGrad.addColorStop(1, "rgba(140,20,20,0)");
+      glowCtx.save();
+      glowCtx.fillStyle = ambGrad;
+      glowCtx.fillRect(0, 0, size, size);
+      glowCtx.restore();
+
+      // ── Hold-progress arc ──
+      if (hold > 0.01) {
+        glowCtx.save();
+        glowCtx.strokeStyle = `rgba(200,60,60,${hold * 0.9})`;
+        glowCtx.lineWidth = 2.5;
+        glowCtx.shadowColor = "rgba(200,60,60,0.7)";
+        glowCtx.shadowBlur = 8;
+        glowCtx.beginPath();
+        glowCtx.arc(cx, cy, orbR + 22, -Math.PI/2, -Math.PI/2 + hold*Math.PI*2);
+        glowCtx.stroke();
+        glowCtx.restore();
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
+
+  if (TIER === "low") return <LowEndOrb size={size} />;
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: size, height: size, position: "relative" }}
+      aria-hidden="true"
+    >
+      {/* Hidden fluid sim canvas (NxN pixels, upscaled by glow canvas) */}
+      <canvas
+        ref={fluidCanvasRef}
+        style={{ display: "none" }}
+        width={fluidPx}
+        height={fluidPx}
+      />
+      {/* Visible composite canvas */}
+      <canvas
+        ref={glowCanvasRef}
+        width={size}
+        height={size}
+        style={{
+          width: size,
+          height: size,
+          display: "block",
+          borderRadius: "50%",
+        }}
+      />
+    </div>
+  );
+});
+
+/* ─────────────────────────────────────────────
+   useTypingVelocity hook — tracks keystrokes/sec
+   ───────────────────────────────────────────── */
+export function useTypingVelocity(value: string): number {
+  const historyRef = useRef<number[]>([]);
+  const prevLenRef = useRef(value.length);
+  const [velocity, setVelocity] = useState(0);
+
+  useEffect(() => {
+    if (value.length !== prevLenRef.current) {
+      historyRef.current.push(Date.now());
+      prevLenRef.current = value.length;
+      // Keep last 2s of keystrokes
+      const now = Date.now();
+      historyRef.current = historyRef.current.filter(t => now - t < 2000);
+      setVelocity(historyRef.current.length / 2);
+    }
+  }, [value]);
+
+  // Decay velocity over time
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      historyRef.current = historyRef.current.filter(t => now - t < 2000);
+      setVelocity(historyRef.current.length / 2);
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  return velocity;
+}
+
+export default SuminagashiOrb;

@@ -1,0 +1,567 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Obylon by Umbraxis — Phase 2 · Cinematic Paper Archive (RESTORED) */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sage: var(--sage);
+  --color-soft-yellow: var(--soft-yellow);
+  --color-charcoal: var(--charcoal);
+  --color-cream: var(--cream);
+  --color-blood: var(--blood);
+  --color-amber: var(--amber);
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+:root {
+  --radius: 1rem;
+
+  /* Cinematic Paper palette */
+  --cream: oklch(0.985 0.012 92);          /* #fcfaf2 */
+  --charcoal: oklch(0.27 0.005 270);       /* #2e2f30 */
+  --sage: oklch(0.83 0.035 145);           /* #c2d1c2 */
+  --soft-yellow: oklch(0.91 0.09 95);      /* #f0e68c */
+  --blood: oklch(0.5 0.18 27);
+  --amber: oklch(0.78 0.14 75);
+
+  --background: var(--cream);
+  --foreground: var(--charcoal);
+  --card: oklch(0.992 0.008 92);
+  --card-foreground: var(--charcoal);
+  --popover: oklch(0.992 0.008 92);
+  --popover-foreground: var(--charcoal);
+  --primary: var(--charcoal);
+  --primary-foreground: var(--cream);
+  --secondary: oklch(0.95 0.012 92);
+  --secondary-foreground: var(--charcoal);
+  --muted: oklch(0.94 0.012 92);
+  --muted-foreground: oklch(0.45 0.008 270);
+  --accent: var(--sage);
+  --accent-foreground: var(--charcoal);
+  --destructive: var(--blood);
+  --destructive-foreground: var(--cream);
+  --border: oklch(0.27 0.005 270 / 12%);
+  --input: oklch(0.27 0.005 270 / 16%);
+  --ring: oklch(0.27 0.005 270 / 35%);
+
+  --gradient-archive:
+    radial-gradient(ellipse 60% 50% at 12% 0%,
+      color-mix(in oklab, var(--soft-yellow) 35%, transparent) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 60% at 100% 100%,
+      color-mix(in oklab, var(--sage) 30%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, oklch(0.985 0.012 92) 0%, oklch(0.97 0.014 92) 100%);
+
+  --shadow-paper:
+    0 1px 0 oklch(1 0 0 / 0.6) inset,
+    0 1px 2px oklch(0.27 0.005 270 / 0.06),
+    0 8px 24px -12px oklch(0.27 0.005 270 / 0.18);
+  --shadow-paper-elevated:
+    0 1px 0 oklch(1 0 0 / 0.7) inset,
+    0 4px 10px -2px oklch(0.27 0.005 270 / 0.10),
+    0 20px 40px -16px oklch(0.27 0.005 270 / 0.22);
+  --shadow-aura:
+    0 0 0 1px oklch(0.27 0.005 270 / 0.06) inset,
+    0 0 60px -10px color-mix(in oklab, var(--soft-yellow) 50%, transparent);
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  html, body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-serif);
+    letter-spacing: -0.018em;
+  }
+}
+
+/* Cinematic paper surface */
+.surface-archive {
+  background: var(--gradient-archive);
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Subtle paper grain — desktop only */
+@media (min-width: 768px) {
+  .noise-overlay::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+    opacity: 0.14;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.18  0 0 0 0 0.18  0 0 0 0 0.18  0 0 0 0.35 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    will-change: auto;
+  }
+}
+
+/* Paper textures */
+.paper-texture,
+.glass {
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--card) 96%, transparent) 0%,
+      color-mix(in oklab, var(--card) 88%, transparent) 100%),
+    repeating-linear-gradient(0deg,
+      color-mix(in oklab, var(--charcoal) 2%, transparent) 0 1px,
+      transparent 1px 4px);
+  border: 1px solid color-mix(in oklab, var(--charcoal) 8%, transparent);
+  box-shadow: var(--shadow-paper);
+  backdrop-filter: none;
+}
+
+.paper-elevated,
+.glass-strong {
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--card) 100%, transparent) 0%,
+      color-mix(in oklab, var(--card) 94%, transparent) 100%),
+    repeating-linear-gradient(0deg,
+      color-mix(in oklab, var(--charcoal) 2%, transparent) 0 1px,
+      transparent 1px 4px);
+  border: 1px solid color-mix(in oklab, var(--charcoal) 10%, transparent);
+  box-shadow: var(--shadow-paper-elevated);
+  backdrop-filter: none;
+}
+
+/* Parchment header strip */
+.parchment-strip {
+  background-image:
+    linear-gradient(180deg, color-mix(in oklab, var(--soft-yellow) 30%, transparent), transparent),
+    repeating-linear-gradient(0deg,
+      color-mix(in oklab, var(--charcoal) 3%, transparent) 0 1px,
+      transparent 1px 3px);
+  border-bottom: 1px solid color-mix(in oklab, var(--charcoal) 10%, transparent);
+}
+
+/* Madara-style aura ring */
+.aura { position: relative; }
+.aura::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(from 0deg,
+    transparent 0%,
+    color-mix(in oklab, var(--soft-yellow) 70%, transparent) 25%,
+    transparent 50%,
+    color-mix(in oklab, var(--sage) 70%, transparent) 75%,
+    transparent 100%);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  padding: 1px;
+  opacity: 0.85;
+}
+
+/* Heartbeat */
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.55; }
+}
+.heartbeat-dot { animation: heartbeat 1.4s ease-in-out infinite; }
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+.pulse-ring { animation: pulse-ring 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite; }
+
+@keyframes aura-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.aura-spin::after { animation: aura-rotate 6s linear infinite; }
+
+/* Forensic terminal */
+.terminal-scanlines {
+  background-color: oklch(0.22 0.006 270);
+  color: var(--cream);
+  background-image: repeating-linear-gradient(180deg,
+    transparent 0 2px,
+    oklch(1 0 0 / 0.04) 2px 3px);
+}
+
+.perspective-1000 { perspective: 1000px; }
+.preserve-3d { transform-style: preserve-3d; }
+
+/* Signal interrupted */
+@keyframes signal-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.signal-interrupted { animation: signal-flicker 1.5s ease-in-out infinite; }
+
+/* Glow utilities */
+.glow-blood { text-shadow: 0 0 12px color-mix(in oklab, var(--blood) 35%, transparent); }
+.glow-sage { text-shadow: 0 0 14px color-mix(in oklab, var(--sage) 80%, transparent); }
+.glow-amber { text-shadow: 0 0 14px color-mix(in oklab, var(--amber) 70%, transparent); }
+
+/* Real-time alert pulse */
+@keyframes signal-glow {
+  0% {
+    background-color: color-mix(in oklab, var(--soft-yellow) 60%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--soft-yellow) 60%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.signal-glow { animation: signal-glow 2.4s ease-out 1; }
+
+@keyframes signal-glow-violation {
+  0% {
+    background-color: color-mix(in oklab, var(--blood) 22%, transparent);
+    box-shadow: inset 3px 0 0 0 var(--blood);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 3px 0 0 0 color-mix(in oklab, var(--blood) 0%, transparent);
+  }
+}
+.signal-glow-violation { animation: signal-glow-violation 3.2s ease-out 1; }
+
+/* Typewriter caret */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.caret::after {
+  content: "▍";
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+}
+
+/* Hover affordances */
+.node-card {
+  transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+.node-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--charcoal) 22%, transparent);
+}
+
+/* Compact list row */
+.row-zebra:nth-child(even) {
+  background-color: color-mix(in oklab, var(--charcoal) 2.5%, transparent);
+}
+
+/* Calm motion */
+@media (max-width: 767px) {
+  .aura-spin::after { animation-duration: 12s; opacity: 0.55; }
+  .pulse-ring { animation-duration: 2.4s; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aura-spin::after,
+  .pulse-ring,
+  .heartbeat-dot,
+  .signal-interrupted { animation: none !important; }
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--charcoal) 15%, transparent);
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--charcoal) 25%, transparent);
+}
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--charcoal) 15%, transparent) transparent;
+}
+
+/* Animated Avatar Aura (God-Tier Cinematic Style) */
+@keyframes avatar-aura-spin-fast {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes avatar-aura-spin-slow-reverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+@keyframes avatar-aura-pulse {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+.avatar-aura-spin-fast {
+  animation: avatar-aura-spin-fast 4s linear infinite;
+}
+.avatar-aura-spin-slow-reverse {
+  animation: avatar-aura-spin-slow-reverse 8s linear infinite;
+}
+.avatar-aura-pulse {
+  animation: avatar-aura-pulse 4s ease-in-out infinite;
+}
+
+@keyframes avatar-aura-spin-medium {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes avatar-flicker {
+  0%, 100% { opacity: 0.9; }
+  10% { opacity: 0.4; }
+  20% { opacity: 0.95; }
+  40% { opacity: 0.3; }
+  50% { opacity: 1; }
+  70% { opacity: 0.5; }
+  80% { opacity: 0.85; }
+}
+
+.avatar-aura-spin-medium {
+  animation: avatar-aura-spin-medium 6s linear infinite;
+}
+.avatar-flicker {
+  animation: avatar-flicker 3s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-aura-spin-fast,
+  .avatar-aura-spin-slow-reverse,
+  .avatar-aura-spin-medium,
+  .avatar-flicker,
+  .avatar-aura-pulse { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK MODE — Premium Cinematic Dark (Apple · Vercel · Linear quality)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dark {
+  /* ── Core palette overrides ── */
+  --cream: oklch(0.14 0.006 280);
+  --charcoal: oklch(0.92 0.008 270);
+  --sage: oklch(0.72 0.06 155);
+  --soft-yellow: oklch(0.76 0.10 80);
+  --blood: oklch(0.58 0.20 27);
+  --amber: oklch(0.82 0.14 75);
+
+  /* ── Surface hierarchy — rich blue-blacks, never pure #000 ── */
+  --background: oklch(0.135 0.008 280);
+  --foreground: oklch(0.93 0.006 270);
+  --card: oklch(0.185 0.01 278);
+  --card-foreground: oklch(0.91 0.006 270);
+  --popover: oklch(0.19 0.012 278);
+  --popover-foreground: oklch(0.91 0.006 270);
+
+  /* ── Semantic colors ── */
+  --primary: oklch(0.92 0.006 270);
+  --primary-foreground: oklch(0.135 0.008 280);
+  --secondary: oklch(0.22 0.01 278);
+  --secondary-foreground: oklch(0.88 0.008 270);
+  --muted: oklch(0.22 0.01 278);
+  --muted-foreground: oklch(0.62 0.012 270);
+  --accent: oklch(0.24 0.014 275);
+  --accent-foreground: oklch(0.93 0.006 270);
+  --destructive: oklch(0.55 0.18 25);
+  --destructive-foreground: oklch(0.95 0.02 25);
+
+  /* ── Borders & inputs — subtle luminous edges ── */
+  --border: oklch(1 0 0 / 0.08);
+  --input: oklch(1 0 0 / 0.10);
+  --ring: oklch(1 0 0 / 0.20);
+
+  /* ── Dark archive gradient — subtle cool/warm shifts like Apple dark bg ── */
+  --gradient-archive:
+    radial-gradient(ellipse 80% 60% at 15% 0%,
+      oklch(0.18 0.025 280 / 0.6) 0%, transparent 65%),
+    radial-gradient(ellipse 70% 50% at 90% 100%,
+      oklch(0.17 0.02 320 / 0.4) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 50% 50%,
+      oklch(0.16 0.015 260 / 0.3) 0%, transparent 70%),
+    linear-gradient(180deg, oklch(0.135 0.008 280) 0%, oklch(0.155 0.01 278) 100%);
+
+  /* ── Shadows — dark base with subtle luminous edges ── */
+  --shadow-paper:
+    0 1px 0 oklch(1 0 0 / 0.04) inset,
+    0 1px 2px oklch(0 0 0 / 0.30),
+    0 8px 24px -12px oklch(0 0 0 / 0.50);
+  --shadow-paper-elevated:
+    0 1px 0 oklch(1 0 0 / 0.06) inset,
+    0 4px 12px -2px oklch(0 0 0 / 0.40),
+    0 20px 48px -16px oklch(0 0 0 / 0.60);
+  --shadow-aura:
+    0 0 0 1px oklch(1 0 0 / 0.06) inset,
+    0 0 80px -12px oklch(0.4 0.08 280 / 0.25);
+}
+
+/* ── Dark: surface archive ── */
+.dark .surface-archive {
+  background: var(--gradient-archive);
+}
+
+/* ── Dark: noise overlay — screen blend for dark surfaces ── */
+@media (min-width: 768px) {
+  .dark .noise-overlay::before {
+    opacity: 0.06;
+    mix-blend-mode: screen;
+  }
+}
+
+/* ── Dark: paper / glass cards ── */
+.dark .paper-texture,
+.dark .glass {
+  background:
+    linear-gradient(180deg,
+      oklch(0.20 0.012 278 / 0.95) 0%,
+      oklch(0.18 0.01 278 / 0.88) 100%),
+    repeating-linear-gradient(0deg,
+      oklch(1 0 0 / 0.02) 0 1px,
+      transparent 1px 4px);
+  border: 1px solid oklch(1 0 0 / 0.07);
+  box-shadow: var(--shadow-paper);
+  backdrop-filter: none;
+}
+
+/* ── Dark: elevated paper / glass-strong ── */
+.dark .paper-elevated,
+.dark .glass-strong {
+  background:
+    linear-gradient(180deg,
+      oklch(0.22 0.014 278) 0%,
+      oklch(0.20 0.012 278 / 0.94) 100%),
+    repeating-linear-gradient(0deg,
+      oklch(1 0 0 / 0.025) 0 1px,
+      transparent 1px 4px);
+  border: 1px solid oklch(1 0 0 / 0.09);
+  box-shadow: var(--shadow-paper-elevated);
+  backdrop-filter: none;
+}
+
+/* ── Dark: parchment header strip ── */
+.dark .parchment-strip {
+  background-image:
+    linear-gradient(180deg, oklch(0.20 0.015 278 / 0.5), transparent),
+    repeating-linear-gradient(0deg,
+      oklch(1 0 0 / 0.03) 0 1px,
+      transparent 1px 3px);
+  border-bottom: 1px solid oklch(1 0 0 / 0.08);
+}
+
+/* ── Dark: aura ring — luminous against dark ── */
+.dark .aura::after {
+  background: conic-gradient(from 0deg,
+    transparent 0%,
+    oklch(0.75 0.10 80 / 0.65) 25%,
+    transparent 50%,
+    oklch(0.70 0.06 155 / 0.55) 75%,
+    transparent 100%);
+  opacity: 0.70;
+}
+
+/* ── Dark: glow utilities — amplified for dark surfaces ── */
+.dark .glow-blood { text-shadow: 0 0 16px oklch(0.55 0.20 27 / 0.55), 0 0 40px oklch(0.50 0.18 27 / 0.20); }
+.dark .glow-sage  { text-shadow: 0 0 16px oklch(0.72 0.06 155 / 0.70), 0 0 40px oklch(0.72 0.06 155 / 0.25); }
+.dark .glow-amber { text-shadow: 0 0 16px oklch(0.80 0.14 75 / 0.65), 0 0 40px oklch(0.80 0.14 75 / 0.22); }
+
+/* ── Dark: node card hover ── */
+.dark .node-card:hover {
+  transform: translateY(-2px);
+  border-color: oklch(1 0 0 / 0.14);
+  box-shadow:
+    var(--shadow-paper-elevated),
+    0 0 40px -8px oklch(0.4 0.06 280 / 0.20);
+}
+
+/* ── Dark: zebra striping ── */
+.dark .row-zebra:nth-child(even) {
+  background-color: oklch(1 0 0 / 0.03);
+}
+
+/* ── Dark: custom scrollbar ── */
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 12%);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(1 0 0 / 22%);
+}
+.dark .custom-scrollbar {
+  scrollbar-color: oklch(1 0 0 / 12%) transparent;
+}
+
+/* Terminal scanlines — already dark-friendly, but darken base */
+.dark .terminal-scanlines {
+  background-color: oklch(0.10 0.008 270);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UTILITY OVERRIDES — work in both light and dark
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Banned / 404 page gradient overrides ── */
+.from-background { --tw-gradient-from: var(--color-background); }
+.via-secondary   { --tw-gradient-via: var(--color-secondary); }
+.to-background   { --tw-gradient-to: var(--color-background); }
+
+/* Make the blob colors visible — light mode */
+.bg-primary\/10  { background-color: color-mix(in oklab, var(--soft-yellow) 25%, transparent) !important; }
+.bg-primary\/20  { background-color: color-mix(in oklab, var(--soft-yellow) 35%, transparent) !important; }
+.bg-primary\/5   { background-color: color-mix(in oklab, var(--sage) 20%, transparent) !important; }
+.bg-primary\/15  { background-color: color-mix(in oklab, var(--sage) 25%, transparent) !important; }
+
+/* Dark mode blob overrides — use the dark-adapted accent colors */
+.dark .bg-primary\/10  { background-color: oklch(0.5 0.08 265 / 15%) !important; }
+.dark .bg-primary\/20  { background-color: oklch(0.5 0.08 265 / 25%) !important; }
+.dark .bg-primary\/5   { background-color: oklch(0.45 0.06 160 / 12%) !important; }
+.dark .bg-primary\/15  { background-color: oklch(0.45 0.06 160 / 18%) !important; }
+
+/* Page background — real gradient in both modes */
+.from-background.via-secondary.to-background,
+[class*="from-background"][class*="via-secondary"] {
+  background: var(--gradient-archive) !important;
+}
+
+/* Card border glow — adapts to dark palette via variable reference */
+.border-primary\/20 {
+  border-color: color-mix(in oklab, var(--charcoal) 15%, transparent) !important;
+}
+
+/* Pulsing dot color */
+.text-primary { color: var(--color-amber) !important; }
+.bg-primary.animate-pulse {
+  background-color: var(--color-amber) !important;
+}

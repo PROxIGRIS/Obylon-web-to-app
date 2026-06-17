@@ -1,0 +1,3 @@
+BEGIN;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.user_sessions;
+COMMIT;
